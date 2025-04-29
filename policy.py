@@ -3,7 +3,7 @@ import numpy as np
 from datetime import datetime as dt
 
 import json
-import requests
+
 import time
 import configparser
 import xml.etree.ElementTree as ET
@@ -43,12 +43,13 @@ classlocal.checklist_debug_en       = 0 #打印本地自选股行情
 classlocal.Index_time_debug_en      = 0
 classlocal.Trade_init_debug_en      = 0 #
 classlocal.model_df_level2_debug_en = 0 #模型选出列表购买列表
+classlocal.buy_dict_debug_en        = 1 #开仓字典打印
 classlocal.JLZY_debug_en            = 0 #棘轮止盈打印
 classlocal.huicedebug_en            = 1 #回测的时候打开，运行的时候关闭
 classlocal.mp_debug_origin_en       = 0 #模型选出打印
 classlocal.ZXCS_debug_en            = 0 #执行周期和次数打印
 classlocal.h_data_debug_en          = 0 #打印执行选股前的行情数据
-classlocal.RSI_debug_en             = 1 #debug信息打印
+classlocal.RSI_debug_en             = 0 #debug信息打印
 classlocal.RSI_STOP_DEBUG           = 0 #行情止损打印
 classlocal.check_list               = ['SA00.ZF']
 classlocal.check_list_debug_en      = 0 #自定义行情品种
@@ -73,7 +74,7 @@ classlocal.count                    = 0                 # 01 记录定时函数�
 classlocal.Period_Type              = '5m'
 classlocal.trade_buy_record_dict    = {}                # 02 买入交易记录
 classlocal.buy_code_count           = 0                 # 03 风控函数，防止买入过多。
-classlocal.Reflash_buy_list         = 1
+classlocal.Reflash_buy_dict         = 1
 
 
 
@@ -158,19 +159,19 @@ classlocal.Lastkindextime_draw      = ''     # 用于画图
 
 classlocal.Kindex_time              = 0     # 当前K线对应的时间
 classlocal.zf_lastK                 = 0     # 当前K线对应的涨幅
-classlocal.buy_list                 = []    #买入列表
-classlocal.sell_list                = []    #卖出列表
+classlocal.buy_dict                 = {}    #买入列表
+classlocal.sell_list                = {}    #卖出列表
 classlocal.LeftMoey                 = 1     #剩余资金
 classlocal.LeftMoeyLast             = 0     #上次剩余
-classlocal.Total_market_cap         = 0     #持仓次市值
+classlocal.Total_market_cap         = 500000     #持仓次市值
 classlocal.Total_market_capLast     = 0     #上次持仓次市值
 classlocal.sp_type                  = 'NONE'
 classlocal.eastmoney_zx_name        = ''
 classlocal.eastmoey_stockPath       = ''
-classlocal.eastmoney_user_buy_list  = ''
+classlocal.eastmoney_user_buy_dict  = ''
 classlocal.eastmoney_zx_name_list   = ''
 classlocal.stockPath_hold           = ''
-classlocal.user_buy_list            = ''
+classlocal.user_buy_dict            = ''
 
 
 classlocal.trade_direction  = 'kong' #duo #kong
@@ -498,6 +499,22 @@ def convert_datetime_format(file_path):
 
     return df
 
+# 模拟连续新增数据
+def add_contract(buy_dictt,contract, datetime_value, position_size, close_price):
+    buy_dictt[contract] = {
+        "时间": datetime_value,
+        "手数": position_size,
+        "开仓价格": close_price
+    }
+    return buy_dictt
+
+def clear_dict(buy_dictt):
+    buy_dictt.clear()
+    return buy_dictt
+
+# 添加合约数据
+#add_contract("ABC123", "2025-04-29 11:30", 5, 120.5)
+
 ###################################start###########################################################################
 #
 ###################################start###########################################################################
@@ -507,7 +524,7 @@ def main():
     主函数：执行 CSV 文件读取和时间格式转换
     """
     # 初始化交易记录 DataFrame
-    columns = ['合约', '时间', '手数', '开仓价格', '止损价格', '止盈价格', '盈利',]
+    columns = ['合约', '时间', '手数', '开仓价格', '止损价格', '止盈价格', '盈利']
     trade_log_file = r"D:\code\test\5m\trade_log.csv"
 
     initial_capital = 500000
@@ -528,6 +545,7 @@ def main():
     end_date = "12310000"
     # 在 for 循环中逐行取出时间并传递给 custom_function
     Right = 0
+    buy_dict                        = classlocal.buy_dict
     for i, datetime_value in enumerate(df['datetime']):
         if i >= 500:  # 从第 500 行后开始处理
             classlocal.Kindex_time = datetime_value
@@ -559,9 +577,17 @@ def main():
             classlocal.close        = open_price
             LeftMoey                = classlocal.LeftMoey
             Totalmoney              = classlocal.Total_market_cap
-            
-            print(f"开仓！合约: {contract}, 时间: {datetime_value}, 手数: {position_size}, 开仓价格: {open_price}")
-    position_opening_calculat(classlocal,)
+            #--------------------------------------------------------------------------
+            #追加到开单字典里面
+            add_contract(buy_dict,contract, datetime_value, position_size, open_price)
+           
+        
+        if buy_dict:
+            #print(f"执行开仓")
+            position_opening_calculat(classlocal,buy_dict,margin_df)
+            clear_dict(buy_dict)
+            print(buy_dict)
+            #print(f"结束开仓")
 ###################################start###########################################################################
 #
 ###################################start###########################################################################
@@ -586,9 +612,9 @@ def get_contract_base_info_from_csv():
 #保证金=报价*交易单位*保证金比例=2000*10*10%=2000元
 ###################################start###########################################################################   
 def get_signal_margin(optioncode,PreClose,df):
-
+    VolumeMultiple    = 1
     # 示例：根据代码查询最低交易保证金率
-    code_to_search = optioncode
+    code_to_search = optioncode[:2]  # 取前两个字符
     if code_to_search in df.index:
         LongMarginRatio = df.loc[code_to_search, "最低交易保证金率"]
         VolumeMultiple  = df.loc[code_to_search, "合约乘数"]
@@ -598,7 +624,7 @@ def get_signal_margin(optioncode,PreClose,df):
 
     if LongMarginRatio <= 0 :
         LongMarginRatio    = 0.030
-    #保证金
+    #合约乘数
     if VolumeMultiple <= 0 :
         VolumeMultiple    = 1
 
@@ -607,25 +633,31 @@ def get_signal_margin(optioncode,PreClose,df):
     LongMargin2            = decimal_places_are_rounded(LongMargin,4)
 
     if classlocal.get_signal_margin_en:
+        print('df:\n',df)
         print('代码:\n',optioncode)
         print('最低保证金率:\n',LongMarginRatio)
         print('保证金率:\n',LongMarginRatio1)
         print('合约乘数:\n',VolumeMultiple)
         print('收盘价:\n',PreClose)
         print('所需保证金:\n',LongMargin2)
-
+    
+    #返回的是保证金
     return LongMargin2
 ###################################start###########################################################################
 #非常重要:仓位管理函数 默认单只股票占仓位的1/10
+#classlocal.LeftMoey:剩余资金
+#classlocal.Total_market_cap：总市值
+#classlocal.Fundbal_AvailRate：单只资金占比
+
 ###################################start###########################################################################
-def position_opening_calculat(classlocal,buy_list):
+def position_opening_calculat(classlocal,buy_dictt,margin_df):
 
     list_data_values        = [0,0,0,0]
     list_clolumsp           = ['code','Kindex_time','SingleNum','close']
     dit1 = dict(zip(range(0,0), list_data_values))
     #转置矩阵
     M_df = pd.DataFrame(dit1,list_clolumsp).T
-    close                   = classlocal.close
+
     LeftMoey                = classlocal.LeftMoey
     Totalmoney              = classlocal.Total_market_cap
     Fundbal_AvailRate       = classlocal.Fundbal_AvailRate
@@ -634,8 +666,12 @@ def position_opening_calculat(classlocal,buy_list):
     signal_stock_money_max  = decimal_places_are_rounded(signal_stock_money_maxt,2)
 
     if signal_stock_money_max > 0:
-        for code in buy_list :
-            margin_t        = get_signal_margin(code,close,margin_df)
+    # 如果你希望遍历并打印
+        for code, close_value in buy_dictt.items():
+            #print(f"Code: {code}, Close: {close_value}")
+            open_price = close_value.get("开仓价格")  # 取出开仓价格
+
+            margin_t        = get_signal_margin(code,open_price,margin_df)
             margin          = decimal_places_are_rounded(margin_t,3)
             if margin       <= 0 :
                 continue
@@ -648,13 +684,16 @@ def position_opening_calculat(classlocal,buy_list):
             classlocal.LeftMoey             = LeftMoey
             #剩余金额够买剩下的,就分配手数
             M_df.loc[code,'code']           = code
-            M_df.loc[code,'close']          = close
+            M_df.loc[code,'close']          = open_price
             M_df.loc[code,'Kindex_time']    = classlocal.Kindex_time
             M_df.loc[code,'SingleNum']      = single_buy_max
             if single_buy_max >= 1 :
                 M_df.loc[code,'SingleNum']  = single_buy_max
+                if classlocal.buy_dict_debug_en:
+                    print(f"合约: {code}, 时间: {classlocal.Kindex_time}, 手数: {single_buy_max}, 开仓价格: {open_price}")
             else :
                 M_df.loc[code,'SingleNum']  = 0
+            
     return M_df
 #查询股份/可用资金等
 
