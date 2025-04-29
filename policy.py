@@ -48,7 +48,7 @@ classlocal.huicedebug_en            = 1 #回测的时候打开，运行的时候
 classlocal.mp_debug_origin_en       = 0 #模型选出打印
 classlocal.ZXCS_debug_en            = 0 #执行周期和次数打印
 classlocal.h_data_debug_en          = 0 #打印执行选股前的行情数据
-classlocal.RSI_debug_en             = 0 #debug信息打印
+classlocal.RSI_debug_en             = 1 #debug信息打印
 classlocal.RSI_STOP_DEBUG           = 0 #行情止损打印
 classlocal.check_list               = ['SA00.ZF']
 classlocal.check_list_debug_en      = 0 #自定义行情品种
@@ -253,8 +253,12 @@ def RSI_checkout(classlocal):
     # 去掉最后一行（基于索引）
     if classlocal.without_last_data:
         h_data_drop_last = h_data.drop(h_data.index[-1])  # 删除最后一行
+        window          = (classlocal.RSI_length * 2) - 8-1  # 20 :14*2 -8
+        threshold_days  = (classlocal.RSI_length / 2) - 1-1  # 6 :14/2 - 1
     else:
         h_data_drop_last = h_data
+        window          = (classlocal.RSI_length * 2) - 8  # 20 :14*2 -8
+        threshold_days  = (classlocal.RSI_length / 2) - 1  # 6 :14/2 - 1
 
     '''
     提取列时类型为 DataFrame：
@@ -264,16 +268,18 @@ def RSI_checkout(classlocal):
     close_prices    = h_data[['close']]
     min_prices      = h_data[['low']]
     '''
-    open_prices = h_data['open']
-    close_prices = h_data['close']
-    min_prices = h_data['low']
+    open_prices = h_data_drop_last['open']
+    close_prices = h_data_drop_last['close']
+    min_prices = h_data_drop_last['low']
 
 
     #----------------------------------------------------------------------------------------------------
     #不会按照最新的数据算来开
     length          = classlocal.RSI_length        #设置的值为14
     rsi             = calculate_rsi(h_data_drop_last, period=length)
-    #print("rsi:", rsi)
+    if len(rsi) < window:
+        print("h_data_长度不够:\n", h_data_drop_last)
+        print("rsi:", rsi)
     #----------------------------------------------------------------------------------------------------
 #选股时间
     monitor_start_time  = classlocal.monitor_start_time
@@ -289,8 +295,7 @@ def RSI_checkout(classlocal):
                 #print('夜盘打开')
         threshold       = classlocal.RSI_threshold_Low
 
-        window          = (classlocal.RSI_length * 2) - 8  # 20 :14*2 -8
-        threshold_days  = (classlocal.RSI_length / 2) - 1  # 6 :14/2 - 1
+
     #----------------------------------------------------------------------------------------------------
         righthand = check_rsi_conditions(rsi, open_prices, close_prices, 
                                          min_prices, threshold, threshold_days, window)
@@ -428,6 +433,10 @@ def check_rsi_conditions(rsi, open_prices, close_prices, min_prices, threshold, 
     """
     # 确保 RSI、开盘价、收盘价和最低价长度一致
     if len(rsi) < window or len(open_prices) < window or len(close_prices) < window or len(min_prices) < window:
+        print(f"rsi: {len(rsi)}")
+        print(f"window: {window}")
+        print(f"open_prices: {len(open_prices)}")
+        return False
         raise ValueError("RSI、开盘价、收盘价和最低价数据的长度必须至少等于 window。")
     
     # 转换为 pandas.Series
@@ -515,19 +524,27 @@ def main():
         trade_log = pd.read_csv(trade_log_file, encoding="utf-8")
     except FileNotFoundError:
         trade_log = pd.DataFrame(columns=columns)
-
+    
+    end_date = "12310000"
     # 在 for 循环中逐行取出时间并传递给 custom_function
     Right = 0
     for i, datetime_value in enumerate(df['datetime']):
         if i >= 500:  # 从第 500 行后开始处理
             classlocal.Kindex_time = datetime_value
             classlocal.h_data = df.iloc[500 + i - 100: 500 + i + 1]  # 确保总行数为 100
-
+            #print(classlocal.h_data)
+            #print(datetime_value)
+            month_day = datetime_value[-8:]
+            #print(datetime_value)
+            #print(month_day)
+            if month_day > end_date:
+                print("时间已超过 12 月 31 日，停止。")
+                break
             Right = RSI_checkout(classlocal)  # 执行 RSI 判断
         
         if Right:  # 如果 RSI 触发信号
             contract = df.iloc[500 + i]['contract']  # 获取当前合约代码
-            open_price = df.iloc[500 + i]['open']  # 获取开仓价格
+            open_price = df.iloc[500 + i]['close']  # 获取开仓价格
             stop_loss = open_price * 0.98  # 假设止损为 2% 亏损
             take_profit = open_price * 1.05  # 假设止盈为 5% 盈利
 
@@ -539,8 +556,12 @@ def main():
             # 追加交易记录到 CSV
             trade_log.to_csv(trade_log_file, index=False, encoding="utf-8-sig")
 
+            classlocal.close        = open_price
+            LeftMoey                = classlocal.LeftMoey
+            Totalmoney              = classlocal.Total_market_cap
+            
             print(f"开仓！合约: {contract}, 时间: {datetime_value}, 手数: {position_size}, 开仓价格: {open_price}")
-
+    position_opening_calculat(classlocal,)
 ###################################start###########################################################################
 #
 ###################################start###########################################################################
