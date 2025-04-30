@@ -44,7 +44,7 @@ classlocal.checklist_debug_en       = 0 #打印本地自选股行情
 classlocal.Index_time_debug_en      = 0
 classlocal.Trade_init_debug_en      = 0 #
 classlocal.model_df_level2_debug_en = 0 #模型选出列表购买列表
-classlocal.buy_dict_debug_en        = 1 #开仓字典打印
+classlocal.buy_dict_debug_en        = 0 #开仓字典打印
 classlocal.JLZY_debug_en            = 0 #棘轮止盈打印
 classlocal.huicedebug_en            = 1 #回测的时候打开，运行的时候关闭
 classlocal.mp_debug_origin_en       = 0 #模型选出打印
@@ -582,7 +582,7 @@ def check_rsi_conditions(rsi, open_prices, close_prices, min_prices, threshold, 
     return True
 
 
-import pandas as pd
+
 ###################################start###########################################################################
 #
 ###################################start###########################################################################
@@ -635,6 +635,98 @@ def draw_open_position(df,datetime_value,open_price):
     plt.legend()
     plt.grid()
     plt.show()
+
+
+import pandas as pd
+
+def detect_sideways_breakout(df, atr_period=10, atr_threshold=0.7, lookback=5, atr_change_threshold=0.3, save_csv=True):
+    """使用 ATR 衡量横盘：
+    1. 过去 lookback 根 K 线 ATR 均值较低（市场波动较小）
+    2. ATR 在最近 5 个周期变化很小（市场稳定）
+    3. 最新一根 K 线是阳线（收盘价 > 开盘价）
+    4. 最新 K 线收盘价突破横盘区间最高点
+    """
+
+    # 复制 DataFrame 以避免修改原始数据
+    df = df.copy()
+
+    # 计算 ATR
+    df["ATR"] = (df["high"] - df["low"]).rolling(window=atr_period).mean()
+
+    # 计算 ATR 变化率
+    df["ATR变化率"] = df["ATR"].diff(periods=5).abs()
+
+    # 计算最近 10 根 K 线的 ATR 均值
+    if df.shape[0] < lookback + 1:
+        print("❌ 数据不足，无法判断横盘")
+        return False
+
+    sideways_atr = df["ATR"].rolling(window=lookback).mean().iloc[-1]
+    long_term_atr = df["ATR"].mean()
+
+    # 仅检查横盘是否满足
+    is_sideways = (sideways_atr < long_term_atr * atr_threshold) and \
+                  (df["ATR变化率"].iloc[-1] < long_term_atr * atr_change_threshold)
+
+    if not is_sideways:
+        return False  # ATR 过高或变化率大，市场非横盘
+
+    # 计算横盘区间最高价
+    sideways_period = df.iloc[-(lookback+1):-1]
+    highest_in_sideways = sideways_period["high"].max()
+
+    # 检测最新 K 线是否突破横盘区间
+    latest_k = df.iloc[-1]
+    breakout = (latest_k["close"] > highest_in_sideways) and (latest_k["close"] > latest_k["open"])
+
+    if save_csv:
+        result_df = pd.DataFrame({
+            "datetime": [latest_k["datetime"]],
+            "ATR均值": [sideways_atr],
+            "长期ATR均值": [long_term_atr],
+            "ATR变化率": [df["ATR变化率"].iloc[-1]],
+            "横盘最高价": [highest_in_sideways],
+            "最新K线收盘价": [latest_k["close"]],
+            "最新K线开盘价": [latest_k["open"]],
+            "是否突破横盘": [breakout]
+        })
+
+        # **追加到已有 CSV，而不是覆盖**
+        result_df.to_csv("横盘突破记录.csv", mode='a', header=False, index=False)
+
+    return breakout
+
+
+def check_conditions(df):
+    """检查最新的行情数据是否符合条件：
+    1. 收盘价高于 215 日 EMA
+    2. 215 日 EMA 在最近 5 天内呈上升趋势
+    3. 收盘价未高出 215 日 EMA 1%
+    """
+    # 先拷贝数据，避免修改视图
+    df = df.copy()
+
+    # 计算 215 日 EMA
+    df["EMA215"] = df["close"].ewm(span=20, adjust=False).mean()
+    # 获取最新的一行数据
+    latest_row = df.iloc[-1] 
+    #print(latest_row)
+    # 计算条件
+    condition1 = latest_row["close"] > latest_row["EMA215"]
+    condition2 = latest_row["EMA215"] - df.iloc[-6]["EMA215"] > 0  # 计算 5 天前的 EMA 变化趋势
+    condition3 = abs(latest_row["close"] - latest_row["EMA215"]) / latest_row["EMA215"] <= 0.01
+    righthand  = condition1 and condition3 and condition2
+    if righthand:
+    # 计算是否发生横盘突破
+        result = detect_sideways_breakout(classlocal.h_data)
+    else :
+        result = False
+    if result:
+        print("\n===== 最终判断 =====")
+        print("最新 K 线是否突破横盘:", result)
+    return result
+
+
 ###################################start###########################################################################
 #
 ###################################start###########################################################################
@@ -645,7 +737,7 @@ def main():
     """
     # 初始化交易记录 DataFrame
     columns = ['合约', '时间', '手数', '开仓价格', '止损价格', '止盈价格', '盈利']
-    trade_log_file = r"D:\code\contract_huice\trade_log.csv"
+    trade_log_file = r"D:\code\contract_huice\trade_log_15m.csv"
 
     initial_capital = 500000
     position_num = initial_capital / 20  # 每次开仓手数
@@ -669,14 +761,14 @@ def main():
     # 在 for 循环中逐行取出时间并传递给 custom_function
     Right = 0
     buy_dict                        = classlocal.buy_dict
-    total_rows = len(df)  # 数据总行数
+    total_rows = len(df)-1  # 数据总行数
 
     for i, datetime_value in enumerate(df['datetime']):
         if i >= 500:
             classlocal.Kindex_time = datetime_value
 
             # 计算索引，确保不会超出范围
-            start_idx = max(500 + i - 100, 0)
+            start_idx = max(500 + i - 500, 0)
             end_idx = min(500 + i, total_rows)
 
             classlocal.h_data = df.iloc[start_idx:end_idx]  
@@ -684,13 +776,17 @@ def main():
             # 重要：检查数据长度
             #print(f"当前数据行数: {len(classlocal.h_data)}")
 
-            if len(classlocal.h_data) < 100:
-                print(f"警告：数据长度不足 100 行，仅有 {len(classlocal.h_data)} 行")
+            if len(classlocal.h_data) < 500:
+                print(f"警告：数据长度不足 500 行，仅有 {len(classlocal.h_data)} 行")
                 break
             # 处理日期格式（确保字符串类型）
             #month_day = str(datetime_value)[-8:]
-            Right = RSI_checkout(classlocal)  # 执行 RSI 计算
-        
+            #涉及到止盈所以还是要算先算RSI
+            #Right1 = RSI_checkout(classlocal)
+                #均线方向计算，K线位置计算
+            Right2 = check_conditions(classlocal.h_data)
+            #Right = Right1 and Right2
+            Right = Right2
         if Right:  # 如果 RSI 触发信号
             contract = df.iloc[500 + i]['contract']  # 获取当前合约代码
             open_price = df.iloc[500 + i]['close']  # 获取开仓价格
@@ -712,8 +808,9 @@ def main():
             # 记录交易信息
             new_trade = pd.DataFrame([[contract, datetime_value, position_num, open_price, stop_loss, take_profit, None]],
                                      columns=columns)
+            trade_log = trade_log.dropna(how="all")  # 删除所有 NaN 行
+            new_trade = new_trade.dropna(how="all")  # 删除所有 NaN 行
             trade_log = pd.concat([trade_log, new_trade], ignore_index=True)
-            #draw_open_position(df,datetime_value,open_price)
         
         if buy_dict:
             #print(f"执行开仓")

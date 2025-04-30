@@ -25,15 +25,6 @@ def mark_buy_points(market_data, trade_log):
     """根据开仓时间，在行情数据中标记符合条件的买点"""
     buy_signals = market_data.merge(trade_log, left_on='datetime', right_on='时间', how='inner')
 
-    # 只保留收盘价高于 50 日EMA的买点
-    buy_signals = buy_signals[buy_signals['close'] > buy_signals['EMA50']]
-
-    # 只保留 50 日EMA在最近 5 天内呈上升趋势的买点
-    buy_signals = buy_signals[buy_signals['EMA50'].diff(periods=5) > 0]
-
-    # 只保留收盘价未高出 50 日EMA 1% 的买点
-    buy_signals = buy_signals[(buy_signals['close'] - buy_signals['EMA50']) / buy_signals['EMA50'] <= 0.01]
-    
     return buy_signals
 
 # 4. 绘制图表（支持多条EMA均线）
@@ -55,7 +46,7 @@ def plot_chart(market_data, buy_signals, ema_periods):
                  label=f"{period}日EMA", linestyle="dashed", color=colors[i % len(colors)])
 
     # 标记符合条件的买点
-    plt.scatter(buy_signals['datetime'], buy_signals['close'], color="red", marker="o", label="买点（收盘高于EMA50）")
+    plt.scatter(buy_signals['datetime'], buy_signals['close'], color="red", marker="o", label="买点（收盘高于EMA215）")
 
     plt.xlabel("日期")
     plt.ylabel("价格")
@@ -66,8 +57,8 @@ def plot_chart(market_data, buy_signals, ema_periods):
 
 # **示例使用**
 market_data, trade_log = load_data(
-    "D:/code/contract_huice/2024主力连续_5min/FG9999.XZCE_2024_5min.csv", 
-    "D:/code/contract_huice/trade_log.csv"
+    "D:/code/contract_huice/2024主力连续_15min/FG9999.XZCE_2024_15min.csv", 
+    "D:/code/contract_huice/trade_log_15m.csv"
 )
 EMA_LIST = [215, 50]
 market_data = calculate_ema(market_data, EMA_LIST)  # 计算多条EMA均线
