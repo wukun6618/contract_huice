@@ -11,7 +11,8 @@ from xml.dom.minidom import parse
 import os
 import sqlite3
 import logging
-
+import pandas as pd
+import matplotlib.pyplot as plt
 
 pd.set_option('expand_frame_repr', False)  #不换行
 pd.set_option('display.max_rows', 5000)     #最多显示数据的行数
@@ -120,12 +121,12 @@ classlocal.sellRSI_time             = 16    #买入后多久执行
 
 classlocal.k_yin_en                 = False #False:不管前一个是啥线入场 True:阳线入场
 classlocal.RSI_threshold_high       = 75   #触发空的值
-classlocal.RSI_threshold_Low        = 35   #RSI触发多的值
+classlocal.RSI_threshold_Low        = 26   #RSI触发多的值
 classlocal.RSI_length               = 14
 classlocal.h_data                   = pd.DataFrame()
 classlocal.alternate_day_trading_en = False #False :隔日交易；True :日内交易；
 classlocal.night_trading_en         = True #False :禁止夜盘开盘；True :夜盘开盘打开；
-classlocal.without_last_data        = True #True :RSI是根据前一根K线来算的；false :是根据最新的K线来算的；
+classlocal.without_last_data        = False #True :RSI是根据前一根K线来算的；false :是根据最新的K线来算的；
 classlocal.RSI_limit_takeprofit_en  = False #False :关闭RSI上限止盈；True :打开RSI上限止盈；
 classlocal.RSI_UP_TAKEPROFIT_SET    = 73   #触发RSI上限止盈，这个需要配合RSI_limit_takeprofit_en为True时有效
 ################################################################################################
@@ -154,10 +155,9 @@ classlocal.TH_High                  = 100    #价格筛选上线单位元
 
 classlocal.Kindex                   = 0     # 当前K线索引
 classlocal.Lastkindextime           = ''     # 当前K线索引
-
 classlocal.Lastkindextime_draw      = ''     # 用于画图
-
 classlocal.Kindex_time              = 0     # 当前K线对应的时间
+
 classlocal.zf_lastK                 = 0     # 当前K线对应的涨幅
 classlocal.buy_dict                 = {}    #买入列表
 classlocal.sell_list                = {}    #卖出列表
@@ -165,6 +165,7 @@ classlocal.LeftMoey                 = 1     #剩余资金
 classlocal.LeftMoeyLast             = 0     #上次剩余
 classlocal.Total_market_cap         = 500000     #持仓次市值
 classlocal.Total_market_capLast     = 0     #上次持仓次市值
+'''
 classlocal.sp_type                  = 'NONE'
 classlocal.eastmoney_zx_name        = ''
 classlocal.eastmoey_stockPath       = ''
@@ -192,6 +193,104 @@ classlocal.URLopen          = 'https://open.feishu.cn/open-apis/bot/v2/hook/763b
 classlocal.URLclose         = 'https://open.feishu.cn/open-apis/bot/v2/hook/763bec44-0f8e-447b-8341-2e567d7fd6a8'
 classlocal.URLopen_huice    = 'https://open.feishu.cn/open-apis/bot/v2/hook/fb5aa4f9-16b9-49f2-8e3b-2583ec3f3e3e'
 classlocal.URLclose_huice   = 'https://open.feishu.cn/open-apis/bot/v2/hook/fb5aa4f9-16b9-49f2-8e3b-2583ec3f3e3e'
+
+'''
+
+# 检查表结构并添加缺失的列
+def check_and_update_table():
+    conn = sqlite3.connect("trades.db")
+    cursor = conn.cursor()
+    
+    # 获取表结构
+    cursor.execute("PRAGMA table_info(Trades)")
+    columns = [row[1] for row in cursor.fetchall()]
+    
+    # 需要添加的列
+    missing_columns = []
+    if "close_time" not in columns:
+        missing_columns.append("ALTER TABLE Trades ADD COLUMN close_time TIMESTAMP")
+    if "close_price" not in columns:
+        missing_columns.append("ALTER TABLE Trades ADD COLUMN close_price REAL")
+    if "barnum" not in columns:
+        missing_columns.append("ALTER TABLE Trades ADD COLUMN barnum INTEGER")
+    
+    # 执行缺失列的更新
+    for query in missing_columns:
+        cursor.execute(query)
+    
+    conn.commit()
+    conn.close()
+
+# 初始化数据库（如果尚未创建）
+def initialize_database():
+    conn = sqlite3.connect("trades.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS Trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contract TEXT,
+        trade_time TIMESTAMP,
+        position_num REAL,
+        open_price REAL,
+        stop_loss REAL,
+        take_profit REAL
+    )
+    """)
+    conn.commit()
+    conn.close()
+    
+    # 检查并更新表结构
+    check_and_update_table()
+
+# 插入交易记录（开仓）
+def insert_trade(contract,trade_time,position_num, open_price, stop_loss, take_profit, barnum):
+    conn = sqlite3.connect("trades.db")
+    cursor = conn.cursor()
+    
+    #trade_time = datetime.now()  # 记录开仓时间
+    cursor.execute("""
+    INSERT INTO Trades (contract, trade_time, position_num, open_price, stop_loss, take_profit, close_time, close_price, barnum)
+    VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+    """, (contract, trade_time, position_num, open_price, stop_loss, take_profit, barnum))
+
+    conn.commit()
+    conn.close()
+
+    return trade_time  # 返回交易时间，方便后续逻辑使用
+
+def delete_trade_by_time(trade_time):
+    """按指定时间删除交易记录"""
+    conn = sqlite3.connect("trades.db")
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM Trades WHERE trade_time = ?", (trade_time,))
+    
+    conn.commit()
+    conn.close()
+
+# 查询数据库中的交易记录
+def fetch_trades():
+    conn = sqlite3.connect("trades.db")
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM Trades ORDER BY trade_time DESC")  # 按时间降序排列
+    trades = cursor.fetchall()
+    
+    conn.close()
+    
+    # 转换为 Pandas DataFrame
+    columns = ["id", "contract", "trade_time", "position_num", "open_price", "stop_loss", "take_profit", "close_time", "close_price", "barnum"]
+    df = pd.DataFrame(trades, columns=columns)
+    
+    return df  # 返回交易记录
+
+
+#trade_time  = '202401010900'
+# 记录新交易示例
+#datetime_value = insert_trade("BTCUSD", trade_time,1.5, 50000, 49500, 51000, 30)
+
+
+
 
 ###################################start###########################################################################
 #
@@ -252,14 +351,17 @@ def RSI_checkout(classlocal):
     # 使用 iloc 提取最后 50 行
     h_data          = h_data_all.iloc[-h_data_len:-1]  # 提取倒数第 50 行到倒数第二行
     # 去掉最后一行（基于索引）
+    diff_len        = 8
     if classlocal.without_last_data:
         h_data_drop_last = h_data.drop(h_data.index[-1])  # 删除最后一行
-        window          = (classlocal.RSI_length * 2) - 8-1  # 20 :14*2 -8
-        threshold_days  = (classlocal.RSI_length / 2) - 1-1  # 6 :14/2 - 1
+        window          = (classlocal.RSI_length * 2) +2 - 1  # 29
+        threshold_days  = 3
+        #threshold_days  = (classlocal.RSI_length/ 2) -4  # 3
     else:
         h_data_drop_last = h_data
-        window          = (classlocal.RSI_length * 2) - 8  # 20 :14*2 -8
-        threshold_days  = (classlocal.RSI_length / 2) - 1  # 6 :14/2 - 1
+        window          = (classlocal.RSI_length * 2) +2  # 30
+        threshold_days  = 3
+        #threshold_days  = (classlocal.RSI_length /2) -4  # 3
 
     '''
     提取列时类型为 DataFrame：
@@ -500,10 +602,10 @@ def convert_datetime_format(file_path):
     return df
 
 # 模拟连续新增数据
-def add_contract(buy_dictt,contract, datetime_value, position_size, close_price):
+def add_contract(buy_dictt,contract, datetime_value, position_num, close_price):
     buy_dictt[contract] = {
         "时间": datetime_value,
-        "手数": position_size,
+        "手数": position_num,
         "开仓价格": close_price
     }
     return buy_dictt
@@ -514,7 +616,25 @@ def clear_dict(buy_dictt):
 
 # 添加合约数据
 #add_contract("ABC123", "2025-04-29 11:30", 5, 120.5)
+def draw_open_position(df,datetime_value,open_price):
+    # --------------------------------------------------------------------------
+    # 计算 160 日均线
+    df["MA160"] = df["close"].rolling(window=160).mean()
 
+    # 绘制 160 日均线，并标注开仓点
+    plt.figure(figsize=(12, 6))
+    plt.plot(df["datetime"], df["close"], label="Close Price", color="blue")
+    plt.plot(df["datetime"], df["MA160"], label="160-Day Moving Average", color="red", linestyle="dashed")
+
+    # 标注开仓点
+    plt.scatter(datetime_value, open_price, color="green", marker="o", label="Entry Point")
+
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    plt.title("160-Day Moving Average with Entry Points")
+    plt.legend()
+    plt.grid()
+    plt.show()
 ###################################start###########################################################################
 #
 ###################################start###########################################################################
@@ -525,40 +645,51 @@ def main():
     """
     # 初始化交易记录 DataFrame
     columns = ['合约', '时间', '手数', '开仓价格', '止损价格', '止盈价格', '盈利']
-    trade_log_file = r"D:\code\test\5m\trade_log.csv"
+    trade_log_file = r"D:\code\contract_huice\trade_log.csv"
 
     initial_capital = 500000
-    position_size = initial_capital / 20  # 每次开仓手数
+    position_num = initial_capital / 20  # 每次开仓手数
 
-    file_path = r"D:\code\test\5m\2024主力连续_5min\FG9999.XZCE_2024_5min.csv"
+    file_path = r"D:\code\contract_huice\2024主力连续_5min\FG9999.XZCE_2024_5min.csv"
     
     # 读取并转换数据
     df = convert_datetime_format(file_path)
     print(df.head())
 
-    # 读取已有交易记录（如果 CSV 不存在，则创建新的 DataFrame）
+    # 读取交易记录，如果文件不存在或为空，则创建新的 DataFrame
     try:
-        trade_log = pd.read_csv(trade_log_file, encoding="utf-8")
-    except FileNotFoundError:
+        if os.path.exists(trade_log_file) and os.path.getsize(trade_log_file) > 0:
+            trade_log = pd.read_csv(trade_log_file, encoding="utf-8")
+        else:
+            trade_log = pd.DataFrame(columns=columns)
+    except (FileNotFoundError, pd.errors.EmptyDataError):
         trade_log = pd.DataFrame(columns=columns)
-    
+
     end_date = "12310000"
     # 在 for 循环中逐行取出时间并传递给 custom_function
     Right = 0
     buy_dict                        = classlocal.buy_dict
+    total_rows = len(df)  # 数据总行数
+
     for i, datetime_value in enumerate(df['datetime']):
-        if i >= 500:  # 从第 500 行后开始处理
+        if i >= 500:
             classlocal.Kindex_time = datetime_value
-            classlocal.h_data = df.iloc[500 + i - 100: 500 + i + 1]  # 确保总行数为 100
-            #print(classlocal.h_data)
-            #print(datetime_value)
-            month_day = datetime_value[-8:]
-            #print(datetime_value)
-            #print(month_day)
-            if month_day > end_date:
-                print("时间已超过 12 月 31 日，停止。")
+
+            # 计算索引，确保不会超出范围
+            start_idx = max(500 + i - 100, 0)
+            end_idx = min(500 + i, total_rows)
+
+            classlocal.h_data = df.iloc[start_idx:end_idx]  
+
+            # 重要：检查数据长度
+            #print(f"当前数据行数: {len(classlocal.h_data)}")
+
+            if len(classlocal.h_data) < 100:
+                print(f"警告：数据长度不足 100 行，仅有 {len(classlocal.h_data)} 行")
                 break
-            Right = RSI_checkout(classlocal)  # 执行 RSI 判断
+            # 处理日期格式（确保字符串类型）
+            #month_day = str(datetime_value)[-8:]
+            Right = RSI_checkout(classlocal)  # 执行 RSI 计算
         
         if Right:  # 如果 RSI 触发信号
             contract = df.iloc[500 + i]['contract']  # 获取当前合约代码
@@ -566,28 +697,32 @@ def main():
             stop_loss = open_price * 0.98  # 假设止损为 2% 亏损
             take_profit = open_price * 1.05  # 假设止盈为 5% 盈利
 
-            # 记录交易信息
-            new_trade = pd.DataFrame([[contract, datetime_value, position_size, open_price, stop_loss, take_profit, None]],
-                                     columns=columns)
-            trade_log = pd.concat([trade_log, new_trade], ignore_index=True)
-
             # 追加交易记录到 CSV
-            trade_log.to_csv(trade_log_file, index=False, encoding="utf-8-sig")
-
             classlocal.close        = open_price
-            LeftMoey                = classlocal.LeftMoey
-            Totalmoney              = classlocal.Total_market_cap
+            trade_time  = '202401010900'
+            # 记录新交易示例
+            #距离开仓多少根线
+            barnum = 0
+            #--------------------------------------------------------------------------
+            #追加到数据库里面
+            insert_trade(contract, datetime_value,position_num, open_price, stop_loss, take_profit, barnum)
             #--------------------------------------------------------------------------
             #追加到开单字典里面
-            add_contract(buy_dict,contract, datetime_value, position_size, open_price)
-           
+            add_contract(buy_dict,contract, datetime_value, position_num, open_price)
+            # 记录交易信息
+            new_trade = pd.DataFrame([[contract, datetime_value, position_num, open_price, stop_loss, take_profit, None]],
+                                     columns=columns)
+            trade_log = pd.concat([trade_log, new_trade], ignore_index=True)
+            #draw_open_position(df,datetime_value,open_price)
         
         if buy_dict:
             #print(f"执行开仓")
             position_opening_calculat(classlocal,buy_dict,margin_df)
             clear_dict(buy_dict)
             print(buy_dict)
-            #print(f"结束开仓")
+            #print(f"结束开仓"
+    print(fetch_trades())  # 重新查询数据，确保删除成功
+    trade_log.to_csv(trade_log_file, index=False, encoding="utf-8-sig")
 ###################################start###########################################################################
 #
 ###################################start###########################################################################
@@ -648,11 +783,10 @@ def get_signal_margin(optioncode,PreClose,df):
 #classlocal.LeftMoey:剩余资金
 #classlocal.Total_market_cap：总市值
 #classlocal.Fundbal_AvailRate：单只资金占比
-
 ###################################start###########################################################################
 def position_opening_calculat(classlocal,buy_dictt,margin_df):
 
-    list_data_values        = [0,0,0,0]
+    list_data_values        = ['','',0,0]
     list_clolumsp           = ['code','Kindex_time','SingleNum','close']
     dit1 = dict(zip(range(0,0), list_data_values))
     #转置矩阵
@@ -670,6 +804,7 @@ def position_opening_calculat(classlocal,buy_dictt,margin_df):
         for code, close_value in buy_dictt.items():
             #print(f"Code: {code}, Close: {close_value}")
             open_price = close_value.get("开仓价格")  # 取出开仓价格
+            open_price = float(open_price)  # 显式转换为 Python 原生 float 类型
 
             margin_t        = get_signal_margin(code,open_price,margin_df)
             margin          = decimal_places_are_rounded(margin_t,3)
@@ -683,8 +818,10 @@ def position_opening_calculat(classlocal,buy_dictt,margin_df):
                 LeftMoey    = 0
             classlocal.LeftMoey             = LeftMoey
             #剩余金额够买剩下的,就分配手数
-            M_df.loc[code,'code']           = code
-            M_df.loc[code,'close']          = open_price
+            M_df['code']                    = M_df['code'].astype(str)  # Convert the column to string explicitly
+            M_df.loc[code, 'code']          = code  # Then assign values safely
+            M_df.loc[code,'close']          = float(open_price)
+            M_df['Kindex_time']             = M_df['Kindex_time'].astype(str)  # Convert the column to string explicitly
             M_df.loc[code,'Kindex_time']    = classlocal.Kindex_time
             M_df.loc[code,'SingleNum']      = single_buy_max
             if single_buy_max >= 1 :
@@ -693,9 +830,8 @@ def position_opening_calculat(classlocal,buy_dictt,margin_df):
                     print(f"合约: {code}, 时间: {classlocal.Kindex_time}, 手数: {single_buy_max}, 开仓价格: {open_price}")
             else :
                 M_df.loc[code,'SingleNum']  = 0
-            
+    #返回的就是开仓信息了，直接用于下单
     return M_df
-#查询股份/可用资金等
 
 ###################################start###########################################################################
 #
@@ -704,5 +840,6 @@ if __name__ == "__main__":
     global margin_df
     margin_df = pd.DataFrame()
     margin_df = get_contract_base_info_from_csv()
-
+    # 初始化数据库（仅需调用一次）
+    initialize_database()
     main()

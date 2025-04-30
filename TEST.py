@@ -1,75 +1,75 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime as dt
+import matplotlib.pyplot as plt
 
-
-class b():
-    pass
-classlocal = b()
-
-classlocal.shipan_en                = 0                 ##False :模拟账号；True :实盘账号；
-# 行情设置开关
-classlocal.lefthand_checken         = 0                 # 1 打开行情止损 0 关闭
-classlocal.LongMarginRatio_add      = 0.09              # 在最低保证金基础增加的比例
-classlocal.close_atr_trade_en       = 0                 #0：关掉ART 1:打开ATR行情止盈
-
-classlocal.Fundbal_AvailRate        = 0.05              #单只占总资金仓位
-classlocal.get_signal_margin_en     = 1                 #打印保证金率
-
-
-def decimal_places_are_rounded(floatdata,div):
-    floatdata   = round(floatdata, div)
-    floatdata   = '{:.2f}'.format(floatdata)
-    floatdata   = float(floatdata)
-    return floatdata
-###################################start###########################################################################
-#
-###################################start###########################################################################   
-def get_contract_base_info_from_csv():
-    # 读取 CSV 文件
-    file_path = r"D:\code\test\5m\contract_base_info_filtered.csv"
-    df = pd.read_csv(file_path, encoding="utf-8")
-    # 将 '代码' 设置为索引，以便快速查询保证金率
-    df.set_index("代码", inplace=True)
+# 1. 计算真实波动幅度（TR）
+def calculate_tr(df):
+    """计算真实波动幅度"""
+    df['prev_close'] = df['close'].shift(1)
+    df['TR'] = np.maximum.reduce([
+        df['high'] - df['low'],
+        abs(df['prev_close'] - df['high']),
+        abs(df['prev_close'] - df['low'])
+    ])
     return df
 
- ###################################start###########################################################################
-#获取合约的保证金以便计算手数，get_instrumentdetail 返回的是一个字典
-#保证金=报价*交易单位*保证金比例=2000*10*10%=2000元
-###################################start###########################################################################   
-def get_signal_margin(optioncode,PreClose,df):
+# 2. 计算动态通道
+def calculate_dynamic_channel(df, period=5, factor=1.5):
+    """构建动态通道"""
+    df = calculate_tr(df)
+    df['avg_TR'] = df['TR'].rolling(period).mean()  # 计算波动均值
+    df['middle'] = (df['high'] + df['low']) / 2  # 中轴计算
+    df['upper_band'] = df['middle'] + df['avg_TR'] * factor  # 上轨
+    df['lower_band'] = df['middle'] - df['avg_TR'] * factor  # 下轨
+    return df
 
-    # 示例：根据代码查询最低交易保证金率
-    code_to_search = optioncode
-    if code_to_search in df.index:
-        LongMarginRatio = df.loc[code_to_search, "最低交易保证金率"]
-        VolumeMultiple  = df.loc[code_to_search, "合约乘数"]
-    else:
-        print(f"未找到代码 {code_to_search}")
-        LongMarginRatio = 0
+# 3. 计算突破信号
+def calculate_breakout(df):
+    """突破信号"""
+    df['prev_upper_band'] = df['upper_band'].shift(1)
+    df['breakout_signal'] = np.where(df['upper_band'] > df['prev_upper_band'], 1, 0)
+    return df
 
-    if LongMarginRatio <= 0 :
-        LongMarginRatio    = 0.030
-    #保证金
-    if VolumeMultiple <= 0 :
-        VolumeMultiple    = 1
+# 4. 计算买卖信号
+def calculate_trade_signals(df):
+    """买卖信号逻辑"""
+    df['prev_lower_band'] = df['lower_band'].shift(1)
+    df['buy_signal'] = np.where(df['close'] > df['upper_band'], df['close'], np.nan)  # 仅绘制买点
+    df['sell_signal'] = np.where(df['close'] < df['lower_band'], df['close'], np.nan)  # 仅绘制卖点
+    return df
 
-    LongMarginRatio1       = LongMarginRatio + classlocal.LongMarginRatio_add
-    LongMargin             = PreClose  * VolumeMultiple *LongMarginRatio1
-    LongMargin2            = decimal_places_are_rounded(LongMargin,4)
-
-    if classlocal.get_signal_margin_en:
-        print('df:\n',df)
-        print('代码:\n',optioncode)
-        print('最低保证金率:\n',LongMarginRatio)
-        print('保证金率:\n',LongMarginRatio1)
-        print('合约乘数:\n',VolumeMultiple)
-        print('收盘价:\n',PreClose)
-        print('所需保证金:\n',LongMargin2)
+# 5. 绘制图表（包含买卖信号）
+def plot_chart(df):
+    """绘制行情数据、动态通道和买卖信号"""
+    plt.figure(figsize=(12, 6))
     
-    #返回的是保证金
-    return LongMargin2
-df         = get_contract_base_info_from_csv()
-optioncode = 'FG'
-PreClose   = 1367
-get_signal_margin(optioncode,PreClose,df)
+    # 绘制收盘价
+    plt.plot(df['datetime'], df['close'], label="收盘价", color="blue", alpha=0.6)
+    
+    # 绘制通道
+    plt.plot(df['datetime'], df['upper_band'], label="上轨", color="orange", linestyle="dashed")
+    plt.plot(df['datetime'], df['lower_band'], label="下轨", color="green", linestyle="dashed")
+    
+    # 标记买点
+    plt.scatter(df['datetime'], df['buy_signal'], color="red", marker="^", label="买点")
+    
+    # 标记卖点
+    plt.scatter(df['datetime'], df['sell_signal'], color="black", marker="v", label="卖点")
+
+    plt.xlabel("日期")
+    plt.ylabel("价格")
+    plt.title("动态通道策略 - 买卖信号")
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+# **执行完整策略**
+data_file = "D:/code/contract_huice/2024主力连续_5min/FG9999.XZCE_2024_5min.csv"
+df = pd.read_csv(data_file)
+df['datetime'] = pd.to_datetime(df['datetime'])  # 时间格式转换
+
+df = calculate_dynamic_channel(df)  # 计算动态通道
+df = calculate_breakout(df)         # 计算突破信号
+df = calculate_trade_signals(df)     # 计算买卖信号
+
+plot_chart(df) 
